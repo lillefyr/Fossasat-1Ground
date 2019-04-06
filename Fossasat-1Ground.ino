@@ -30,8 +30,9 @@
 #include "communication.h"
 
 String oldPayload = "No Data";
-#ifndef RADIOTYPE1
 #include <Wire.h>
+
+#ifndef RADIOTYPE1
 #include <credentials.h>
 #include <connectwifi.h>
 #include <mosquitto.h>
@@ -58,6 +59,37 @@ void SendToDisplay(String msg){
   }
   delay(50);
   #endif
+}
+
+void receiveEvent(int bytes) {
+// Get event from display ( send ping )
+  char c;
+  String function_id = "";
+  Serial.println("receiveEvent");
+  while (Wire.available()) {
+    c = Wire.read();
+    function_id += c;
+  }
+  Serial.println(function_id);
+
+  if (function_id == "5")
+  {
+    Communication_TransmitPing();
+    SendToDisplay(function_id);
+  }
+
+  if (function_id == "7")
+  {
+    Communication_TransmitStopTransmitting();
+    SendToDisplay(function_id);
+  }
+
+  if (function_id == "8")
+  {
+    Communication_TransmitStartTransmitting();
+    SendToDisplay(function_id);
+  }
+
 }
 
 #ifndef RADIOTYPE1
@@ -105,10 +137,12 @@ void setup()
   Serial.println();
   Serial.println("FOSSASAT-1 GROUNDSTATION");
 
-#ifndef RADIOTYPE1
-  // No Wifi Available
+  Wire.begin(4);  // join i2c bus (we want 2 way communication)
+  Wire.onReceive(receiveEvent);
+
   
-  Wire.begin();  // join i2c bus (address optional for master)
+#ifndef RADIOTYPE1
+  // No Wifi Available 
   while ( startWifi() > 0 ) { Serial.println("No connection to wifi"); }
   publishMQTT("/fossasat-1/logging", "Groundstation connected");
 #endif
