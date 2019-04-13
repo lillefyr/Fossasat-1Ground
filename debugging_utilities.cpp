@@ -19,10 +19,4 @@ void Debugging_Utilities_DebugLog(String inLine)
 	{
 		Serial.println(inLine);
 	}
-#ifndef RADIOTYPE1
-  if (DEBUG_MQTT)
-  {
-    publishMQTT("/fossasat-1/logging", "gnd:" + inLine);
-  }
-#endif
 }

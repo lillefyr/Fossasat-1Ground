@@ -65,7 +65,7 @@ float CONNECTED_BANDWIDTH = 7.8f;
 ///Chip duration
 
 #if defined(RADIOTYPE0) || defined(RADIOTYPE1)
-int SPREADING_FACTOR = 12;  // MUST BE CHANGED FOR REAL GROUNDSTATION
+int SPREADING_FACTOR = 7;  // 12 have trouble with ESP8266, so should be 7 for now MUST BE CHANGED TO 12 FOR REAL GROUNDSTATION
 #else
 int SPREADING_FACTOR = 7;
 #endif

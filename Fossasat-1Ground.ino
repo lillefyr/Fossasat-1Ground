@@ -29,104 +29,64 @@
 #include "state_machine_declerations.h"
 #include "communication.h"
 
-String oldPayload = "No Data";
 #include <Wire.h>
 
-#ifndef RADIOTYPE1
-#include <credentials.h>
-#include <connectwifi.h>
-#include <mosquitto.h>
-char mosquittoClient[] = "groundstation";
-#endif
+// Payload data from satellite
+// BC:1.234;B:2.345;TS:3.456;RC:456;DS:1;
+String ID = "00";
+String BC = "0.000";
+String B = "0.000";
+String TS = "0.000";
+String RC = "0000";
+String DS = "0";
+
+// Local data
+String RSSI = "000";
+String SNR = "0000";
+String ONLINE = "1";
+String TUNING = "1";
+
+uint32_t timer;
+uint32_t lastOnline;
+uint32_t lastTuning;
+byte eventRequest = 0;
+
+byte lastByte = 0;
 
 void SendToDisplay(String msg){
-#ifndef RADIOTYPE1
 
-  // Send data to display hosted on second Arduino (SPFD508Shield from Aliexpress)
-  String str;
-  int str_len;
-  while ( msg.length() > 0 ) {
-    str = msg.substring(0,32);
-    msg = msg.substring(32);
-    str_len = str.length() + 1;
-    char char_array[str_len];
-    str.toCharArray(char_array, str_len);
+  if ( msg.length() == 0 ) { return; }
+  if ( msg.length() > 32 ) { Serial.print(F("message too long ")); Serial.println(msg); return; }
 
-    Wire.beginTransmission(4); // transmit to device #4
-    Wire.write(char_array);
-    Wire.endTransmission();
-    Serial.println(str);
-  }
+  int str_len = msg.length() + 1;
+  char char_array[str_len];
+  msg.toCharArray(char_array, str_len);
+
+  Wire.beginTransmission(4); // transmit to device #4
+  Wire.write(char_array);
+  Wire.endTransmission();
+
   delay(50);
-  #endif
+  Serial.print("Send to screen <");
+  Serial.print(msg);
+  Serial.println(">");
 }
+
 
 void receiveEvent(int bytes) {
 // Get event from display ( send ping )
   char c;
   String function_id = "";
-  Serial.println("receiveEvent");
   while (Wire.available()) {
     c = Wire.read();
     function_id += c;
   }
-  Serial.println(function_id);
 
-  if (function_id == "5")
-  {
-    Communication_TransmitPing();
-    SendToDisplay(function_id);
-  }
-
-  if (function_id == "7")
-  {
-    Communication_TransmitStopTransmitting();
-    SendToDisplay(function_id);
-  }
-
-  if (function_id == "8")
-  {
-    Communication_TransmitStartTransmitting();
-    SendToDisplay(function_id);
-  }
-
+  if (function_id == "5") { eventRequest = 5; }
+  if (function_id == "7") { eventRequest = 7; }
+  if (function_id == "8") { eventRequest = 8; }
+  return;
 }
-
-#ifndef RADIOTYPE1
-/*
- * Replace the library build-in messageReceived function because
- * #define USE_DEFAULT_MESSAGE_RECEIVED true
- * is not set
- * MQTT is not used for the Arduino Arduino setup (no wifi available)
- */
-void messageReceived(String &topic, String &function_id) {
-  Serial.println("uplink command: " + topic + " - " + function_id);
-
-  if (function_id == "5")
-  {
-    Communication_TransmitPing();
-    SendToDisplay(function_id);
-  }
-
-  if (function_id == "7")
-  {
-    Communication_TransmitStopTransmitting();
-    SendToDisplay(function_id);
-  }
-
-  if (function_id == "8")
-  {
-    Communication_TransmitStartTransmitting();
-    SendToDisplay(function_id);
-  }
-
-  if ( function_id == "DEBUG = true" ) { DEBUG = true; };
-  if ( function_id == "DEBUG = false" ) { DEBUG = false; };
-  if ( function_id == "DEBUG_MQTT = true" ) { DEBUG = true; DEBUG_MQTT = true; };
-  if ( function_id == "DEBUG_MQTT = false" ) { DEBUG_MQTT = false; };
-  if ( function_id == "RESTART" ) { setup(); };
-}
-#endif
 
 /* @brief  startup entry point
   @todo catch failure to SX1278 initializing instead of just locking into a while loop().
@@ -135,18 +95,11 @@ void setup()
 {
   Serial.begin(115200);
   Serial.println();
-  Serial.println("FOSSASAT-1 GROUNDSTATION");
+  Serial.println(F("FOSSASAT-1 GROUNDSTATION"));
 
   Wire.begin(4);  // join i2c bus (we want 2 way communication)
   Wire.onReceive(receiveEvent);
-
   
-#ifndef RADIOTYPE1
-  // No Wifi Available 
-  while ( startWifi() > 0 ) { Serial.println("No connection to wifi"); }
-  publishMQTT("/fossasat-1/logging", "Groundstation connected");
-#endif
-
   // Initialize the SX1278 interface with default settings.
   // See the PDF reports on previous PocketQube attempts for more info.
   Debugging_Utilities_DebugLog("SX1278 interface :\nCARRIER_FREQUENCY "
@@ -156,7 +109,6 @@ void setup()
                                + String(CODING_RATE) + "\nSYNC_WORD: "
                                + String(SYNC_WORD) + "\nOUTPUT_POWER: "
                                + String(OUTPUT_POWER));
-
   byte err_check = LORA.begin(DEFAULT_CARRIER_FREQUENCY, BANDWIDTH, SPREADING_FACTOR, CODING_RATE, SYNC_WORD, OUTPUT_POWER);
 
   if (err_check == ERR_NONE)
@@ -168,77 +120,122 @@ void setup()
     Debugging_Utilities_DebugLog("SX1278 Error code = 0x" + String(err_check, HEX));
     while (true);
   }
+  timer = millis() + 10000;  // next display update ( in 10 seconds )
 }
 
 void loop() {
+
+  // We use integer array instead of String. Seems to work better.
+  uint8_t data[50] = {0};
+  for (uint8_t i=0; i<50; i++) { data[i] = 0; }
+  int16_t state = LORA.receive(data,48);
+
+  // find data length
+  for (lastByte=0; data[lastByte] != 0; lastByte++) { } // Serial.print(data[lastByte]); } Serial.println();
   
-#ifndef RADIOTYPE1
-  loopMQTT();
-  subscribeMQTT("/fossasat-1/tosat");
-#endif
-
-  uint8_t data[60] = {0};
-  for (uint8_t i=0; i<60; i++) {
-    data[i] = 0;
-  }
-  int16_t state = LORA.receive(data,58);
-
-  String str = (char *)data;
+  RSSI = String(LORA.getRSSI());
+  SNR  = String(LORA.getSNR());
   
-  if ((str.length() > 0) && ( oldPayload != str )) {
+  if ( lastByte > 0) {
+    lastOnline = millis();
+    ONLINE = "0";
 
-#ifndef RADIOTYPE1
-    publishMQTT("/fossasat-1/fromsat", str);
-#endif
-    Debugging_Utilities_DebugLog(str);
+    // extract data
+    // FOSSASAT-1    // signature is 10 long, skip
+    //           9;  // ID
+    //             BC:0.00;B:1.65;TS:0.00;RC:150;DS:0; // payload for ID 9
+    int indexOfS1 = -1;
+    if ( data[11] == ';' ) { indexOfS1 = 12; ID = (char)data[10];}
+    else
+       if ( data[12] == ';' ) { indexOfS1 = 13; ID = (char)data[10]; ID.concat((char)data[11]); }
 
-    oldPayload = str;
+    if (indexOfS1 > 0 ) {
+      SendToDisplay("ID:"+ID);
 
-    String RSSI = String(LORA.getRSSI());
-    String SNR  = String(LORA.getSNR());
-    String SendIt = "RS:" + RSSI;
-    SendToDisplay(SendIt);
-    SendIt = "SN:" + SNR;
-    SendToDisplay(SendIt);
+      ///////////////
+      // recieving //
+      ///////////////
+      /*
+      if (ID == "1")
+      {
+        Communication_ReceivedStartedSignal();
+      }
+      else if (ID == "2")
+      {
+        Communication_ReceivedStoppedSignal();
+      }
+      else if (ID == "3")
+      {
+        Communication_ReceivedTransmittedOnline();
+      }
+      else if (ID == "4")
+      {
+        Communication_ReceivedDeploymentSuccess();
+      }
+      else */if (ID == "6")
+      {
+        Communication_ReceivedPong();
+      }
+      else if ( ID == "9" )
+      {
+        // Payload data from satellite
+        // BC:1.234;B:2.345;TS:3.456;RC:456;DS:1;
+              
+        String field;
+        String value;
+        // start 0
+        // field 1
+        // colon 2
+        // value 3
+        // semicolon 4
 
-    SendToDisplay("ONLINE: ");
+        byte fieldOrValue = 0;
+        for (byte i=indexOfS1; i < lastByte; i++) {
+          
+          if ( data[i] == ';' ) {
+            fieldOrValue = 4;
+            
+            if ( field == "BC") { BC = value; }
+            if ( field == "B")  { B  = value; }
+            if ( field == "TS") { TS = value; }
+            if ( field == "RC") { RC = value; }
+            if ( field == "DS") { DS = value; }
+            field = "";
+            value = "";
+          } // end of value
+          
+          if ( fieldOrValue == 3 ) { // append to value
+            value = value + (char)data[i];
+          }
+          if ( fieldOrValue == 2 ) { // initial part of value
+            fieldOrValue = 3;
+            value = (char)data[i];
+          }
+          
+          if ( data[i] == ':' ) { fieldOrValue = 2; } // end of field
 
-    // Added protocol entry to get RSSI and SNR from groundstation to the display
-    SendIt = "FOSSASAT-120;RS:" + RSSI + ";SN:" + SNR + ";";
-    
-#ifndef RADIOTYPE1
-    publishMQTT("/fossasat-1/fromsat", SendIt);
-#endif
+          if ( fieldOrValue == 1 ) { // append to field
+            field = field+(char)data[i];
+          }
 
-    Debugging_Utilities_DebugLog(SendIt);
-   
-    String signature = str.substring(0, 10);
-    String withoutSignature = str.substring(10);
+          if ( fieldOrValue == 0 ) { // initial part of field
+            fieldOrValue = 1;
+            field = (char)data[i];
+          }
 
-    int indexOfS1 = withoutSignature.indexOf(';');
-    String message = withoutSignature.substring(indexOfS1 + 1);
-
-    String function_id = withoutSignature.substring(0, indexOfS1);
-
-    SendIt = "ID:" + function_id;
-    SendToDisplay(SendIt);
-    if (function_id == "9")
-    {
-      // Payload data from satellite
-      // BC:1.234;B:2.345;TS:3.456;RC:456;DS:1;
-      String data;
-      while ( message.length() > 0) {
-        // Split in fields and send one by one
-        indexOfS1 = message.indexOf(';');
-        data = message.substring(0, indexOfS1);
-
-        message = message.substring(indexOfS1+1, message.length() );
-        SendToDisplay(data);
-        
-#ifndef RADIOTYPE1
-        // Needed for esp8266
-        yield();
-#endif
+          if ( fieldOrValue == 4 ) { fieldOrValue = 0; }
+        }
+      }
+      else if (ID == "10")
+      {
+        // Get the frequency error given by the LORA lib, to offset the carrier by.
+        float frequencyError = LORA.getFrequencyError();
+        Serial.print(F("frequency error: ")); Serial.println(frequencyError);
+/*        Communication_ReceivedTune(frequencyError); */
+      }
+      else
+      {
+        Serial.println();
       }
     }
   }
@@ -247,7 +244,7 @@ void loop() {
     if (state == ERR_RX_TIMEOUT)
     {
       // timeout occurred while waiting for a packet
-      Debugging_Utilities_DebugLog("Timeout waiting to receive a packet.");
+      //Debugging_Utilities_DebugLog("Timeout waiting to receive a packet.");
 
       if (HAS_REDUCED_BANDWIDTH) // we have found the satellite already, lost connection
       {
@@ -259,14 +256,18 @@ void loop() {
         LORA.setFrequency(CARRIER_FREQUENCY); // setup lora for wide bandwidth.
         LORA.setBandwidth(BANDWIDTH);
         
-        SendToDisplay("TUNINGON: ");
+        TUNING = "0";
+        lastTuning = millis();
       }
       else // have not found the satellite already
       {
-        Debugging_Utilities_DebugLog("(UNFOUND) Satellite not found! Listening on wide bandwidth mode...");
-        
-        SendToDisplay("OFFLINE: ");
-        SendToDisplay("TUNINGOFF: ");
+        //Debugging_Utilities_DebugLog("(UNFOUND) Satellite not found! Listening on wide bandwidth mode...");
+        if (( lastOnline + 20000 ) < millis() ) {
+          if ( ONLINE == "0" ) { ONLINE = "1"; }
+        }
+        if (( lastTuning + 20000 ) < millis() ) {
+          if ( TUNING == "0" ) { TUNING = 1;   }
+        }
       }
     }
     else if (state == ERR_CRC_MISMATCH)
@@ -332,7 +333,7 @@ void loop() {
     }
     else if (state == ERR_SPI_WRITE_FAILED)
     {
-      Debugging_Utilities_DebugLog("SPI write failed");
+      //Debugging_Utilities_DebugLog("SPI write failed");
     }
     else if (state == ERR_INVALID_CURRENT_LIMIT)
     {
@@ -348,7 +349,25 @@ void loop() {
     }
     else
     {
-      //Debugging_Utilities_DebugLog("ERROR STATE = " + String(state));
+      Debugging_Utilities_DebugLog("ERROR STATE = " + String(state));
     }
   }
+  if ( timer < millis() ) {
+    SendToDisplay("BC:"+BC);
+    SendToDisplay("B:"+B);
+    SendToDisplay("TS:"+TS);
+    SendToDisplay("RC:"+RC);
+    SendToDisplay("DS:"+DS);
+    SendToDisplay("RSSI:"+RSSI);
+    SendToDisplay("SNR:"+SNR);
+    SendToDisplay("ONLINE:"+ONLINE);
+    SendToDisplay("TUNING:"+TUNING);
+    SendToDisplay("GO:GO"); //update screen
+
+    timer = millis() + 10000; //update every 10 seconds
+  }
+  if ( eventRequest == 5 ) { Communication_TransmitPing(); }
+  if ( eventRequest == 7 ) { Communication_TransmitStopTransmitting(); }
+  if ( eventRequest == 8 ) { Communication_TransmitStartTransmitting(); }
+  eventRequest = 0;
 }
